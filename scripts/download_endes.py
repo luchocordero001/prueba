@@ -15,7 +15,10 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
+import tempfile
 from pathlib import Path
+from typing import Iterable
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -51,12 +54,38 @@ def parse_args() -> argparse.Namespace:
         help="User-Agent header to send with requests.",
     )
     parser.add_argument(
+        "--referer",
+        help="Optional Referer header to send with requests.",
+    )
+    parser.add_argument(
+        "--header",
+        action="append",
+        default=[],
+        help="Additional header in 'Name: Value' format (can be repeated).",
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=30,
         help="Request timeout in seconds (default: 30).",
     )
     return parser.parse_args()
+
+
+def build_headers(
+    user_agent: str,
+    referer: str | None,
+    extra_headers: Iterable[str],
+) -> dict[str, str]:
+    headers = {"User-Agent": user_agent}
+    if referer:
+        headers["Referer"] = referer
+    for raw_header in extra_headers:
+        if ":" not in raw_header:
+            raise DownloadError(f"Invalid header format: {raw_header!r}")
+        name, value = raw_header.split(":", 1)
+        headers[name.strip()] = value.strip()
+    return headers
 
 
 def read_url_file(path: str | None) -> list[str]:
@@ -86,9 +115,15 @@ def infer_filename(url: str, headers: dict[str, str]) -> str:
     return "downloaded_file"
 
 
-def download_file(url: str, output_dir: Path, user_agent: str, timeout: int) -> Path:
+def download_file(
+    url: str,
+    output_dir: Path,
+    headers: dict[str, str],
+    timeout: int,
+) -> Path:
     logging.info("Downloading %s", url)
-    request = Request(url, headers={"User-Agent": user_agent})
+    request = Request(url, headers=headers)
+    temp_name = None
     with urlopen(request, timeout=timeout) as response:
         if response.status != 200:
             raise DownloadError(f"HTTP {response.status} for {url}")
@@ -96,15 +131,18 @@ def download_file(url: str, output_dir: Path, user_agent: str, timeout: int) -> 
         filename = infer_filename(url, headers)
         output_path = output_dir / filename
         output_dir.mkdir(parents=True, exist_ok=True)
-        data = response.read()
 
-    if not data:
-        raise DownloadError(f"Empty response for {url}")
+        with tempfile.NamedTemporaryFile(dir=output_dir, delete=False) as temp_file:
+            temp_name = temp_file.name
+            shutil.copyfileobj(response, temp_file)
 
-    output_path.write_bytes(data)
-    size = output_path.stat().st_size
+    size = os.path.getsize(temp_name) if temp_name else 0
     if size == 0:
+        if temp_name and os.path.exists(temp_name):
+            os.remove(temp_name)
         raise DownloadError(f"Downloaded file is empty: {output_path}")
+
+    os.replace(temp_name, output_path)
     logging.info("Saved %s (%d bytes)", output_path, size)
     return output_path
 
@@ -132,10 +170,11 @@ def main() -> int:
         return 2
 
     output_dir = Path(args.output_dir)
+    headers = build_headers(args.user_agent, args.referer, args.header)
     failures: list[str] = []
     for url in urls:
         try:
-            download_file(url, output_dir, args.user_agent, args.timeout)
+            download_file(url, output_dir, headers, args.timeout)
         except Exception as exc:  # noqa: BLE001 - provide error context
             logging.error("Failed to download %s: %s", url, exc)
             failures.append(url)

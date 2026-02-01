@@ -16,6 +16,17 @@ python scripts/download_endes.py \
   --output-dir data/raw
 ```
 
+Si el servidor requiere cabeceras adicionales (por ejemplo, `Referer`), puedes usar:
+
+```bash
+python scripts/download_endes.py \
+  --url "https://proyectos.inei.gob.pe/iinei/srienaho/descarga/SPSS/968-Modulo1629.zip" \
+  --referer "https://proyectos.inei.gob.pe/" \
+  --output-dir data/raw
+```
+
+También puedes enviar cabeceras arbitrarias con `--header "Nombre: Valor"`.
+
 Descargar múltiples archivos listados en un archivo de texto:
 
 ```bash
